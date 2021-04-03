@@ -30,6 +30,8 @@ import connections
 import re
 import configparser
 import os
+import threading
+from time import sleep
 
 BK_CATEGORIES=['嗶咔汉化','全彩','长篇','同人','短篇','圆神领域','碧蓝幻想','CG杂图','英语','生肉','纯爱','百合','耽美','伪娘','后宫','扶他','单行本','姐姐','妹妹','SM','性转','恋足','人妻','NTR','强暴','非人类','舰队','Love Live','刀剑神域','Fate','东方','WEBTOON','一般漫画','欧美','Cosplay','重口']
 BK_CATEGORIES_RAW=['嗶咔漢化','全彩','長篇','同人','短篇','圓神領域','碧藍幻想','CG雜圖','英語ENG','生肉','純愛','百合花園','耽美花園','偽娘哲學','後宮閃光','扶他樂園','單行本','姐姐系','妹妹系','SM','性轉換','足の恋','人妻','NTR','強暴','非人類','艦隊收藏','LoveLive','SAO刀劍神域','Fate','東方','WEBTOON','禁書目錄','歐美','Cosplay','重口地帶']
@@ -63,6 +65,59 @@ def g_combobox_with_entries(entries):
         ct.append(i,entries[i])
     return ct
 
+def g_label_bold(label):
+    l=gtk.Label('')
+    l.set_markup('<b>'+label+'</b>')
+    l.set_valign(gtk.Align.START)
+    return l
+
+def g_label_set_wrap(length_per_line):
+    widget=gtk.Label(None)
+    widget.set_line_wrap(True)
+    widget.set_line_wrap_mode(gtk.WrapMode.CHAR)
+    widget.set_max_width_chars(length_per_line)
+    return widget
+
+class LibreBikaDownloadManager(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.pending=[]
+        self.should_die=False
+    def run(self):
+        print('DOWNLOADER IS RUNNING')
+        while not self.should_die:
+            if len(self.pending)==0:
+                #print('Pending stack size = 0, next check in 1 sec')
+                sleep(1)
+            else:
+                print('Pending stack size = '+str(len(self.pending)))
+                target=self.pending[0]
+                success=0
+                failure=0
+                print('  Found work target size = '+str(len(target[1]))+', id = '+target[0]+', order = '+str(target[2]))
+                if not os.path.exists('librebika'):
+                    os.mkdir('librebika')
+                if not os.path.exists('librebika/local'):
+                    os.mkdir('librebika/local')
+                if not os.path.exists('librebika/local/'+target[0]):
+                    os.mkdir('librebika/local/'+target[0])
+                if not os.path.exists('librebika/local/'+target[0]+'/'+str(target[2])):
+                    os.mkdir('librebika/local/'+target[0]+'/'+str(target[2]))
+                for e in target[1]:
+                    res=connections.downloader(e[1],'librebika/local/'+target[0]+'/'+str(target[2])+'/'+e[0])
+                    if res==None:
+                        print('    Download '+e[0]+' : NETWORK ERROR, url = '+e[1])
+                        failure+=1
+                    elif res:
+                        print('    Download '+e[0]+' : SUCCESS, url = '+e[1])
+                        success+=1
+                    elif not res:
+                        print('    Download '+e[0]+' : SERVER ERROR, url = '+e[1])
+                        failure+=1
+                print('  Finished, success = '+str(success)+', failure = '+str(failure))
+                self.pending.remove(target)
+        print('DOWNLOADER KILLED')
+
 class LibreBikaWindow(gtk.Window):
     def __init__(self,title,token):
         gtk.Window.__init__(self,title=title)
@@ -72,6 +127,8 @@ class LibreBikaWindow(gtk.Window):
         self.token=token
         self.user_profile=None
         self.update_user_profile()
+        self.downloader=LibreBikaDownloadManager()
+        self.downloader.start()
 
         self.layout=gtk.VBox(False,0)
         self.add(self.layout)
@@ -81,8 +138,6 @@ class LibreBikaWindow(gtk.Window):
         self.menu_user=gtk.MenuItem.new_with_label('用户')
         self.menu_program=gtk.MenuItem.new_with_label('程序')
         self.menu_about=gtk.MenuItem.new_with_label('关于')
-        self.menu_prank=gtk.MenuItem.new_with_label('*最新游戏* 点我赢500元现金')
-        self.menu_prank.connect('button-release-event',self.show_prank)
         self.menu_user_sub=gtk.Menu()
         self.menu_user_sub.attach(gtk.MenuItem.new_with_label('资料'),0,1,0,1)
         self.menu_user_sub.attach(g_menu_item_with_callback('注销',self.pre_logout),0,1,1,2)
@@ -92,13 +147,13 @@ class LibreBikaWindow(gtk.Window):
         self.menu_program.set_submenu(self.menu_program_sub)
         self.menu_about_sub=gtk.Menu()
         self.menu_about_sub.attach(gtk.MenuItem.new_with_label('捐赠'),0,1,0,1)
-        self.menu_about_sub.attach(gtk.MenuItem.new_with_label('关于'),0,1,1,2)
+        self.menu_about_sub.attach(g_menu_item_with_callback('许可',self.create_about_license_window),0,1,1,2)
         self.menu_about_sub.attach(gtk.MenuItem.new_with_label('信息'),0,1,2,3)
+        self.menu_about_sub.attach(gtk.MenuItem.new_with_label('关于'),0,1,3,4)
         self.menu_about.set_submenu(self.menu_about_sub)
         self.menu.add(self.menu_user)
         self.menu.add(self.menu_program)
         self.menu.add(self.menu_about)
-        #self.menu.add(self.menu_prank) Be nice
         self.layout.pack_start(self.menu,False,False,0)
 
         self.quick=gtk.HBox(True,0)
@@ -180,6 +235,7 @@ class LibreBikaWindow(gtk.Window):
 
         self.chapter_list_parent=gtk.ScrolledWindow()
         self.chapter_list=gtk.TreeView()
+        self.chapter_list.connect('row-activated',self.chapter_list_change)
         self.chapter_list_box=gtk.VBox(False,20)
         self.chapter_list_parent.add(self.chapter_list)
         self.chapter_list_box.add(self.chapter_list_parent)
@@ -203,17 +259,60 @@ class LibreBikaWindow(gtk.Window):
         self.element_list.append_column(gtk.TreeViewColumn('名称',gtk.CellRendererText(),text=0))
         self.chapter_list.append_column(gtk.TreeViewColumn('名称',gtk.CellRendererText(),text=0))
 
+        self.detail_parent=gtk.ScrolledWindow()
         self.detail=gtk.VBox()
+        self.detail_parent.add_with_viewport(self.detail)
         self.detail.set_halign(gtk.Align.CENTER)
         self.detail_image=gtk.Image()
         self.detail_image.set_size_request(200,275)
         self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('picaph.png'))
         self.detail.pack_start(self.detail_image,False,False,0)
+        self.comic_title=g_label_set_wrap(25)
+        self.comic_author=g_label_set_wrap(25)
+        self.comic_translator=g_label_set_wrap(25)
+        self.comic_description=g_label_set_wrap(25)
+        self.comic_categories=g_label_set_wrap(25)
+        self.comic_tags=g_label_set_wrap(25)
+        self.comic_status=g_label_set_wrap(25)
+        self.comic_likes=g_label_set_wrap(25)
+        self.comic_views=g_label_set_wrap(25)
+        self.comic_comments=g_label_set_wrap(25)
+        self.detail.pack_start(self.comic_title,False,False,0)
+        self.detail.pack_start(self.comic_author,False,False,0)
+        self.detail.pack_start(self.comic_translator,False,False,0)
+        self.comic_description_box=gtk.HBox()
+        self.comic_description_box.pack_start(g_label_bold('简介：'),False,False,0)
+        self.comic_description_box.pack_start(self.comic_description,False,False,0)
+        self.detail.pack_start(self.comic_description_box,False,False,0)
+        self.comic_categories_box=gtk.HBox()
+        self.comic_categories_box.pack_start(g_label_bold('类别：'),False,False,0)
+        self.comic_categories_box.pack_start(self.comic_categories,False,False,0)
+        self.detail.pack_start(self.comic_categories_box,False,False,0)
+        self.comic_tags_box=gtk.HBox()
+        self.comic_tags_box.pack_start(g_label_bold('标签：'),False,False,0)
+        self.comic_tags_box.pack_start(self.comic_tags,False,False,0)
+        self.detail.pack_start(self.comic_tags_box,False,False,0)
+        self.comic_status_box=gtk.HBox()
+        self.comic_status_box.pack_start(g_label_bold('状态：'),False,False,0)
+        self.comic_status_box.pack_start(self.comic_status,False,False,0)
+        self.detail.pack_start(self.comic_status_box,False,False,0)
+        self.comic_likes_box=gtk.HBox()
+        self.comic_likes_box.pack_start(g_label_bold('点赞数量：'),False,False,0)
+        self.comic_likes_box.pack_start(self.comic_likes,False,False,0)
+        self.detail.pack_start(self.comic_likes_box,False,False,0)
+        self.comic_views_box=gtk.HBox()
+        self.comic_views_box.pack_start(g_label_bold('浏览量：'),False,False,0)
+        self.comic_views_box.pack_start(self.comic_views,False,False,0)
+        self.detail.pack_start(self.comic_views_box,False,False,0)
+        self.comic_comments_box=gtk.HBox()
+        self.comic_comments_box.pack_start(g_label_bold('评论数量：'),False,False,0)
+        self.comic_comments_box.pack_start(self.comic_comments,False,False,0)
+        self.detail.pack_start(self.comic_comments_box,False,False,0)
 
         self.explorer.add(self.task_list_box)
         self.explorer.add(self.element_list_box)
         self.explorer.add(self.chapter_list_box)
-        self.explorer.add(self.detail)
+        self.explorer.add(self.detail_parent)
         self.layout.pack_start(self.explorer,True,True,0)
 
         self.task_add.connect('clicked',self.create_search_window)
@@ -224,11 +323,15 @@ class LibreBikaWindow(gtk.Window):
         self.comic_profiles_cache={}
         self.comic_episodes_cache={}
         self.comic_episodes_load_cache={}
-    def show_prank(self,button,data):
-        notice=gtk.MessageDialog(transient_for=self,message_type=gtk.MessageType.INFO,buttons=gtk.ButtonsType.OK,text='选择您的后宫')
-        notice.format_secondary_text('真有傻卵信这种弱智广告？')
-        notice.run()
-        notice.destroy()
+
+        self.connect('destroy',self.quit)
+    def quit(self,window):
+        self.downloader.should_die=True
+        gtk.main_quit()
+    def create_about_license_window(self,button):
+        dialog=AboutLicenseWindow()
+        dialog.run()
+        dialog.destroy()
     def gen_context(self):
         return [self.token,self.config_mapping_service['channel'],BK_QUALITIES[self.config_mapping_service['quality']]]
     def show_auth_error(self,resp,transient_for=None):
@@ -287,6 +390,46 @@ class LibreBikaWindow(gtk.Window):
                 self.chapter_data.append([i['title']])
             self.comic_episodes_load_cache[id]+=1
         self.chapter_list_load.props.sensitive=self.comic_episodes_load_cache[id]<self.comic_episodes_cache[id]['pages']
+    def chapter_list_change(self,tree,path,col):
+        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][self.element_list_snapshot_index]['_id']
+        page=1
+        imgs=[]
+        all=False
+        order=int(self.comic_episodes_cache[id]['docs'][path.get_indices()[0]]['order'])
+        while True:
+            resp=connections.sv_comic_resource_list(self.gen_context(),id,order,page)
+            if resp==None:
+                self.show_network_error()
+                break
+            elif type(resp)==int:
+                self.show_auth_error(resp)
+                break
+            else:
+                start=1 if resp['page']==1 else (resp['page']-1)*resp['limit']+1
+                for e in resp['docs']:
+                    local=str(start)+'.'+e['media']['path'].split('.')[-1]
+                    if not os.path.exists('librebika/local/'+id+'/'+str(order)+'/'+local):
+                        imgs.append([local,e['media']['fileServer']+'/static/'+e['media']['path']])
+                    start+=1
+                if page==resp['pages']:
+                    all=True
+                    break
+                else:
+                    page+=1
+        if all:
+            l=[id,imgs,order]
+            is_new=True
+            for e in self.downloader.pending:
+                if e[0]==l[0] and e[2]==l[2]:
+                    is_new=False
+                    break
+            if is_new:
+                self.downloader.pending.append(l)
+                print('Main: Added new task, id = '+id+', order = '+str(order))
+            else:
+                print('Main: Skipped, id = '+id+', order = '+str(order))
+        else:
+            print('Main: Aborted for error, id = '+id+', order = '+str(order))
     def element_list_change(self,tree,path,col):
         id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][path.get_indices()[0]]['_id']
         self.element_list_snapshot_index=path.get_indices()[0]
@@ -326,6 +469,19 @@ class LibreBikaWindow(gtk.Window):
                     pass #do anything?
             else:
                 self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('librebika/thumbnails/'+id+'.'+resp['thumb']['path'].split('.')[-1]))
+            self.update_comic_profile_display(id)
+    def update_comic_profile_display(self,id):
+        cache=self.comic_profiles_cache[id]
+        self.comic_title.set_markup('<b>'+cache['title']+'</b>')
+        self.comic_author.set_text(cache['author'])
+        self.comic_translator.set_text(cache['chineseTeam'] if len(cache['chineseTeam'])>0 else '未知')
+        self.comic_description.set_text(cache['description'])
+        self.comic_categories.set_text(','.join(cache['categories']))
+        self.comic_tags.set_text(','.join(cache['tags']))
+        self.comic_status.set_text('完结' if cache['finished'] else '未完结')
+        self.comic_likes.set_text(str(cache['totalLikes']))
+        self.comic_views.set_text(str(cache['totalViews']))
+        self.comic_comments.set_text(str(cache['commentsCount']))
     def create_settings_window(self,button):
         dialog=SettingsWindow(self)
         ret=dialog.run()
@@ -517,6 +673,25 @@ class LibreBikaWindow(gtk.Window):
             config.write(f)
         self.config_mapping_service=service
         self.config_mapping_search=search
+
+class AboutLicenseWindow(gtk.Dialog):
+    def __init__(self):
+        gtk.Dialog.__init__(self,title='许可声明')
+        self.get_action_area().set_halign(gtk.Align.CENTER)
+        self.set_default_size(200,-1)
+        self.add_button('关闭',0)
+        chlabel=gtk.Label('本软件（即LibreBika）的制作和传播秉承免费开源的精神，无意侵犯任何人的商业利益。本软件和嗶咔无合作关系。禁止贩卖本软件或以本软件为基础获得经济利益。基于GPL2.0（不包含新版本）许可，用户可自由使用、修改、和传播本软件。本作者不承担用户任何行为和后果的责任。本作者无义务和能力干涉经过修改的本软件的功能和传播。本软件依赖嗶咔的API。用户不可使用本软件进行干涉嗶咔服务器正常运行的行为。本软件的官方版本仅在Github由用户OddBirdStanley以Python源代码的形式发布。在运行第三方版本前，用户应当仔细检查源代码以确保使用安全。用户不应运行经过封装的闭源的本软件的版本。本软件仅可在桌面平台使用。任何声明皆以本软件的官方版本为准。')
+        enlabel=gtk.Label('LibreBika: An Open-source Third-party Client of PicaComic.\nCopyright © 2021 by Stanley Jian <jianstanley@outlook.com>\n\nThis program is free software; you can redistribute it and/or modify\nit under the terms of the GNU General Public License Version 2 as published by\nthe Free Software Foundation.\n\nThis program is distributed in the hope that it will be useful,\nbut WITHOUT ANY WARRANTY; without even the implied warranty of\nMERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the\nGNU General Public License for more details.\n\nYou should have received a copy of the GNU General Public License along\nwith this program; if not, write to the Free Software Foundation, Inc.,\n51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.\n\n@license GPL-2.0 <http://spdx.org/licenses/GPL-2.0>')
+        chlabel.set_line_wrap(True)
+        chlabel.set_line_wrap_mode(gtk.WrapMode.CHAR)
+        chlabel.set_max_width_chars(65)
+        chlabel.set_halign(gtk.Align.CENTER)
+        g_set_margins(chlabel,bottom=20)
+        self.get_content_area().add(chlabel)
+        self.get_content_area().add(enlabel)
+        g_set_margins(self.get_content_area(),20,20,20,20)
+        g_set_margins(self.get_action_area(),20,20,0,20)
+        self.show_all()
 
 class CreateSearchWindow(gtk.Dialog):
     def __init__(self):

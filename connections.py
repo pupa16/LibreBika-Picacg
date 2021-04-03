@@ -159,3 +159,12 @@ def sv_user_profile(context):
     if resp['code']!=200 and 'message' in resp:
         return int(resp['error'])
     return resp['data']['user']
+
+def sv_comic_resource_list(context,id,idx,page):
+    try:
+        resp=json.loads(submit('comics/'+id+'/order/'+str(idx)+'/pages',context[1],context[2],is_post=False,params={'page':str(page)},token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return resp['data']['pages']

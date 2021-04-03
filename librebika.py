@@ -84,6 +84,5 @@ if requires_login:
         f.write(token+'\n')
 
 librebika_window=uis.LibreBikaWindow('LibreBika '+LB_VERSION,token)
-librebika_window.connect('destroy',gtk.main_quit)
 librebika_window.show_all()
 gtk.main()
