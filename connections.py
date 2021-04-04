@@ -136,7 +136,7 @@ def sv_comic_profile(context,id):
 
 def downloader(url,name):
     try:
-        resp=requests.get(url,stream=True)
+        resp=requests.get(url,stream=True,headers={'User-Agent':BK_USER_AGENT}) #Not entirely sure if it works
         if resp.status_code!=200:
             return False
         else:
@@ -200,3 +200,12 @@ def sv_heart(context,id):
     if resp['code']!=200 and 'message' in resp:
         return int(resp['error'])
     return True
+
+def sv_user_favorite(context,page,sort_time):
+    try:
+        resp=json.loads(submit('users/favourite',context[1],context[2],is_post=False,params={'page':str(page),'s':'da' if sort_time else 'dd'},token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return resp['data']['comics']

@@ -31,6 +31,7 @@ import re
 import configparser
 import os
 import threading
+from random import random
 from time import sleep
 
 BK_CATEGORIES=['嗶咔汉化','全彩','长篇','同人','短篇','圆神领域','碧蓝幻想','CG杂图','英语','生肉','纯爱','百合','耽美','伪娘','后宫','扶他','单行本','姐姐','妹妹','SM','性转','恋足','人妻','NTR','强暴','非人类','舰队','Love Live','刀剑神域','Fate','东方','WEBTOON','一般漫画','欧美','Cosplay','重口']
@@ -43,7 +44,8 @@ username_regex=re.compile('[^\da-z\._]')
 config_service_entries=['quality','channel']
 config_search_entries=['includeoriginaltext','includegay','includenonadult','includegore']
 config_search_indices={'includeoriginaltext':32,'includegay':12,'includenonadult':9,'includegore':35}
-mode_display={'k':'关键字','a':'作者','t':'标签','ct':'汉化组'}
+mode_display={'k':'关键字','a':'作者','t':'标签','ct':'汉化组','f':'收藏'}
+sort_display={'d':'默认','t':'旧新','h':'爱心','p':'人数'}
 
 def g_set_margins(widget,top=0,right=0,bottom=0,left=0):
     widget.set_margin_start(left)
@@ -116,6 +118,7 @@ class LibreBikaDownloadManager(threading.Thread):
                     elif not res:
                         print('    Download '+e[0]+' : SERVER ERROR, url = '+e[1])
                         failure+=1
+                    sleep(random())
                 print('  Finished, success = '+str(success)+', failure = '+str(failure))
                 self.pending.remove(target)
         print('DOWNLOADER KILLED')
@@ -123,13 +126,13 @@ class LibreBikaDownloadManager(threading.Thread):
 class LibreBikaWindow(gtk.Window):
     def __init__(self,title,token):
         gtk.Window.__init__(self,title=title)
-        self.set_icon_from_file('librebika_logo.png')
 
+        self.connect('destroy',self.quit)
+        self.set_icon_from_file('librebika_logo.png')
         self.load_config()
         self.token=token
         self.user_profile=None
         self.update_user_profile()
-        print(self.user_profile)
         self.downloader=LibreBikaDownloadManager()
         self.downloader.start()
 
@@ -165,15 +168,13 @@ class LibreBikaWindow(gtk.Window):
         g_set_margins(self.task_box,left=20)
         self.task_add=g_button_with_callback('+',self.create_search_window)
         self.task_del=gtk.Button.new_with_label('-')
-        self.task_view=g_combobox_with_entries({'s':'搜索','f':'收藏','h':'历史','l':'下载'})
-        self.task_view.props.active_id='s'
-        self.task_view.connect('changed',self.task_view_changed)
+        self.task_reset_fav=g_button_with_callback('重载收藏夹',self.reset_favorite)
         g_set_margins(self.task_add,20,0,20,0)
         g_set_margins(self.task_del,20,0,20,20)
-        g_set_margins(self.task_view,20,0,20,20)
+        g_set_margins(self.task_reset_fav,20,0,20,20)
         self.task_box.add(self.task_add)
         self.task_box.add(self.task_del)
-        self.task_box.add(self.task_view)
+        self.task_box.add(self.task_reset_fav)
         self.stamp_box=gtk.Box()
         self.stamp_box.set_halign(gtk.Align.CENTER)
         self.stamp=g_button_with_callback('签到不可用' if self.user_profile==None else ('已签到' if self.user_profile['isPunched'] else '签到'),self.perform_stamp)
@@ -191,9 +192,6 @@ class LibreBikaWindow(gtk.Window):
         self.task_data=gtk.ListStore(str,str,str,str)
         self.element_data=gtk.ListStore(str)
         self.chapter_data=gtk.ListStore(str)
-
-        self.task_data_core=[]
-        self.task_data_entries=[]
 
         self.explorer=gtk.HBox(True,20)
         self.explorer.fill=True
@@ -369,115 +367,69 @@ class LibreBikaWindow(gtk.Window):
 
         self.task_list_index=-1
         self.element_list_index=-1
-        self.element_list_snapshot_index=-1
+        self.task_data_core=[]
+        self.task_data_entries=[]
         self.comic_profiles_cache={}
         self.comic_episodes_cache={}
         self.comic_episodes_load_cache={}
+        self.current_comic_id=None
 
-        self.connect('destroy',self.quit)
-    def quit(self,window):
-        self.downloader.should_die=True
-        gtk.main_quit()
-    def create_about_license_window(self,button):
-        dialog=AboutLicenseWindow()
-        dialog.run()
+        self.show_all()
+        self.initialize_favorite()
+    def initialize_favorite(self):
+        resp=connections.sv_user_favorite(self.gen_context(),1,True)
+        if resp==None:
+            self.show_network_error()
+        elif type(resp)==int:
+            self.show_auth_error(resp)
+        else:
+            self.task_data_core.append(['（收藏夹）','f','t','',resp['total'],0 if resp['total']==0 else resp['pages']])
+            self.task_data_entries.append({'1':resp['docs']} if len(resp['docs'])!=0 else {})
+            self.task_data.append(['（收藏夹）',mode_display['f'],sort_display['t'],''])
+    def reset_favorite(self,button):
+        dialog=ResetFavoriteWindow()
+        ret=dialog.run()
+        if ret==0:
+            resp=connections.sv_user_favorite(self.gen_context(),1,dialog.sort.props.active_id=='t')
+            if resp==None:
+                self.show_network_error()
+            elif type(resp)==int:
+                self.show_auth_error(resp)
+            else:
+                self.task_data_core[0]=['（收藏夹）','f',dialog.sort.props.active_id,'',resp['total'],0 if resp['total']==0 else resp['pages']]
+                self.task_data_entries[0]={'1':resp['docs']} if len(resp['docs'])!=0 else {}
+                self.task_data[0]=['（收藏夹）',mode_display['f'],sort_display[dialog.sort.props.active_id],'']
+                if self.task_data_core[self.task_list_index][1]=='f':
+                    self.element_data.clear()
+                    self.chapter_data.clear()
+                    self.task_list_stat_all.set_text('总数：'+str(self.task_data_core[self.task_list_index][4]))
+                    self.task_list_stat_pages.set_text('页面数：'+str(self.task_data_core[self.task_list_index][5]))
+                    self.element_list_action_previous.props.sensitive=False
+                    self.element_list_action_jump.props.sensitive=self.task_data_core[self.task_list_index][5]>1
+                    self.element_list_action_next.props.sensitive=self.task_data_core[self.task_list_index][5]>1
+                    self.element_list_index=0
+                    self.element_data.clear()
+                    self.chapter_data.clear()
+                    self.chapter_list_load.props.sensitive=False
+                    self.element_list_cache_list.remove_all()
+                    if len(self.task_data_entries[self.task_list_index])!=0:
+                        for i in self.task_data_entries[self.task_list_index]['1']:
+                            self.element_data.append([i['title']])
+                        tmp_cache=[]
+                        for i in self.task_data_entries[self.task_list_index]:
+                            tmp_cache.append(int(i))
+                        tmp_cache.sort()
+                        for i in range(len(tmp_cache)):
+                            self.element_list_cache_list.append(str(tmp_cache[i]),str(tmp_cache[i]))
+                        self.element_list_cache_list.props.active_id='1'
         dialog.destroy()
-    def gen_context(self):
-        return [self.token,self.config_mapping_service['channel'],BK_QUALITIES[self.config_mapping_service['quality']]]
-    def show_auth_error(self,resp,transient_for=None):
-        if transient_for==None:
-            transient_for=self
-        notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.YES_NO,text='加载错误')
-        notice.format_secondary_text('服务器访问失败。代码：'+str(resp)+'\n'+('原因未知。' if resp!=1005 else '用户凭证过期或无效。')+'\n是否立刻注销以重启服务?')
-        ret=notice.run()
-        notice.destroy()
-        if ret==gtk.ResponseType.YES:
-            self.logout()
-    def show_network_error(self,transient_for=None):
-        if transient_for==None:
-            transient_for=self
-        notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.OK,text='加载错误')
-        notice.format_secondary_text('网络连接失败。')
-        notice.run()
-        notice.destroy()
-    def task_view_changed(self,button):
-        print(button.props.active_id) #TODO
-    def perform_stamp(self,button):
-        resp=connections.sv_stamp(self.gen_context())
-        if resp==None:
-            self.show_network_error()
-        elif type(resp)==int:
-            self.show_auth_error(resp)
-        else:
-            if resp:
-                if self.update_user_profile():
-                    self.stamp.set_label('签到不可用' if self.user_profile==None else ('已签到' if self.user_profile['isPunched'] else '签到'))
-                    if self.user_profile!=None and self.user_profile['isPunched']:
-                        self.stamp.props.sensitive=False
-            else:
-                notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.OK,text='签到错误')
-                notice.format_secondary_text('出现了未知的错误。')
-                notice.run()
-                notice.destroy()
-    def update_user_profile(self):
-        resp=connections.sv_user_profile(self.gen_context())
-        if resp==None:
-            self.show_network_error()
-        elif type(resp)==int:
-            self.show_auth_error(resp)
-        else:
-            self.user_profile=resp
-            return True
-        return False
-    def heart_change(self,button,state):
-        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][self.element_list_snapshot_index]['_id']
-        if state!=self.comic_profiles_cache[id]['isLiked']:
-            resp=connections.sv_heart(self.gen_context(),id)
-            if resp==None:
-                self.show_network_error()
-                button.set_active(self.comic_profiles_cache[id]['isLiked'])
-                return True
-            elif type(resp)==int:
-                self.show_auth_error(resp)
-                button.set_active(self.comic_profiles_cache[id]['isLiked'])
-                return True
-            else:
-                self.comic_profiles_cache[id]['isLiked']=not self.comic_profiles_cache[id]['isLiked']
-    def fav_change(self,button,state):
-        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][self.element_list_snapshot_index]['_id']
-        if state!=self.comic_profiles_cache[id]['isFavourite']:
-            resp=connections.sv_favorite(self.gen_context(),id)
-            if resp==None:
-                self.show_network_error()
-                button.set_active(self.comic_profiles_cache[id]['isFavourite'])
-                return True
-            elif type(resp)==int:
-                self.show_auth_error(resp)
-                button.set_active(self.comic_profiles_cache[id]['isFavourite'])
-                return True
-            else:
-                self.comic_profiles_cache[id]['isFavourite']=not self.comic_profiles_cache[id]['isFavourite']
-    def chapter_load(self,button):
-        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][self.element_list_snapshot_index]['_id']
-        resepi=connections.sv_comic_episode(self.gen_context(),id,self.comic_episodes_load_cache[id]+1)
-        if resepi==None:
-            self.show_network_error()
-        elif type(resepi)==int:
-            self.show_auth_error()
-        else:
-            for i in resepi['docs']:
-                self.comic_episodes_cache[id]['docs'].append(i)
-                self.chapter_data.append([i['title']])
-            self.comic_episodes_load_cache[id]+=1
-        self.chapter_list_load.props.sensitive=self.comic_episodes_load_cache[id]<self.comic_episodes_cache[id]['pages']
     def chapter_list_change(self,tree,path,col):
-        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][self.element_list_snapshot_index]['_id']
         page=1
         imgs=[]
         all=False
-        order=int(self.comic_episodes_cache[id]['docs'][path.get_indices()[0]]['order'])
+        order=int(self.comic_episodes_cache[self.current_comic_id]['docs'][path.get_indices()[0]]['order'])
         while True:
-            resp=connections.sv_comic_resource_list(self.gen_context(),id,order,page)
+            resp=connections.sv_comic_resource_list(self.gen_context(),self.current_comic_id,order,page)
             if resp==None:
                 self.show_network_error()
                 break
@@ -488,7 +440,7 @@ class LibreBikaWindow(gtk.Window):
                 start=1 if resp['page']==1 else (resp['page']-1)*resp['limit']+1
                 for e in resp['docs']:
                     local=str(start)+'.'+e['media']['path'].split('.')[-1]
-                    if not os.path.exists('librebika/local/'+id+'/'+str(order)+'/'+local):
+                    if not os.path.exists('librebika/local/'+self.current_comic_id+'/'+str(order)+'/'+local):
                         imgs.append([local,e['media']['fileServer']+'/static/'+e['media']['path']])
                     start+=1
                 if page==resp['pages']:
@@ -497,7 +449,7 @@ class LibreBikaWindow(gtk.Window):
                 else:
                     page+=1
         if all:
-            l=[id,imgs,order]
+            l=[self.current_comic_id,imgs,order]
             is_new=True
             for e in self.downloader.pending:
                 if e[0]==l[0] and e[2]==l[2]:
@@ -505,75 +457,50 @@ class LibreBikaWindow(gtk.Window):
                     break
             if is_new:
                 self.downloader.pending.append(l)
-                print('Main: Added new task, id = '+id+', order = '+str(order))
+                print('Main: Added new task, id = '+self.current_comic_id+', order = '+str(order))
             else:
-                print('Main: Skipped, id = '+id+', order = '+str(order))
+                print('Main: Skipped, id = '+self.current_comic_id+', order = '+str(order))
         else:
-            print('Main: Aborted for error, id = '+id+', order = '+str(order))
+            print('Main: Aborted for error, id = '+self.current_comic_id+', order = '+str(order))
     def element_list_change(self,tree,path,col):
-        id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][path.get_indices()[0]]['_id']
-        self.element_list_snapshot_index=path.get_indices()[0]
+        self.current_comic_id=self.task_data_entries[self.task_list_index][str(self.element_list_index+1)][path.get_indices()[0]]['_id']
         if not os.path.exists('librebika/thumbnails/'):
             os.mkdir('librebika/thumbnails/')
-        if id not in self.comic_profiles_cache:
-            resp=connections.sv_comic_profile(self.gen_context(),id)
+        if self.current_comic_id not in self.comic_profiles_cache:
+            resp=connections.sv_comic_profile(self.gen_context(),self.current_comic_id)
         else:
-            resp=self.comic_profiles_cache[id]
+            resp=self.comic_profiles_cache[self.current_comic_id]
         if resp==None:
             self.show_network_error()
         elif type(resp)==int:
             self.show_auth_error(resp)
         else:
-            if id not in self.comic_profiles_cache:
-                self.comic_profiles_cache[id]=resp
+            if self.current_comic_id not in self.comic_profiles_cache:
+                self.comic_profiles_cache[self.current_comic_id]=resp
             self.chapter_data.clear()
-            if id not in self.comic_episodes_cache:
-                resepi=connections.sv_comic_episode(self.gen_context(),id,1)
+            if self.current_comic_id not in self.comic_episodes_cache:
+                resepi=connections.sv_comic_episode(self.gen_context(),self.current_comic_id,1)
                 if resepi==None:
                     self.show_network_error()
                 elif type(resepi)==int:
                     self.show_auth_error()
                 else:
-                    self.comic_episodes_cache[id]=resepi
-                    self.comic_episodes_load_cache[id]=1
-            self.chapter_list_load.props.sensitive=self.comic_episodes_load_cache[id]<self.comic_episodes_cache[id]['pages']
-            for i in self.comic_episodes_cache[id]['docs']:
+                    self.comic_episodes_cache[self.current_comic_id]=resepi
+                    self.comic_episodes_load_cache[self.current_comic_id]=1
+            self.chapter_list_load.props.sensitive=self.comic_episodes_load_cache[self.current_comic_id]<self.comic_episodes_cache[self.current_comic_id]['pages']
+            for i in self.comic_episodes_cache[self.current_comic_id]['docs']:
                 self.chapter_data.append([i['title']])
-            if not os.path.exists('librebika/thumbnails/'+id+'.'+resp['thumb']['path'].split('.')[-1]):
-                resdown=connections.downloader(resp['thumb']['fileServer']+'/static/'+resp['thumb']['path'],'librebika/thumbnails/'+id+'.'+resp['thumb']['path'].split('.')[-1])
+            if not os.path.exists('librebika/thumbnails/'+self.current_comic_id+'.'+resp['thumb']['path'].split('.')[-1]):
+                resdown=connections.downloader(resp['thumb']['fileServer']+'/static/'+resp['thumb']['path'],'librebika/thumbnails/'+self.current_comic_id+'.'+resp['thumb']['path'].split('.')[-1])
                 if resdown==None:
                     self.show_network_error()
                 elif resdown:
-                    self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('librebika/thumbnails/'+id+'.'+resp['thumb']['path'].split('.')[-1]))
+                    self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('librebika/thumbnails/'+self.current_comic_id+'.'+resp['thumb']['path'].split('.')[-1]))
                 elif not resdown:
                     pass #do anything?
             else:
-                self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('librebika/thumbnails/'+id+'.'+resp['thumb']['path'].split('.')[-1]))
-            self.update_comic_profile_display(id)
-    def update_comic_profile_display(self,id):
-        cache=self.comic_profiles_cache[id]
-        self.comic_title.set_markup('<b>'+cache['title']+'</b>')
-        self.comic_author.set_text(cache['author'])
-        self.comic_translator.set_text(cache['chineseTeam'] if len(cache['chineseTeam'])>0 else '未知')
-        self.comic_description.set_text(cache['description'])
-        self.comic_creation.set_text(cache['created_at'].split('.')[0].replace('T',' '))
-        self.comic_update.set_text(cache['updated_at'].split('.')[0].replace('T',' '))
-        self.comic_categories.set_text(','.join(cache['categories']))
-        self.comic_tags.set_text(','.join(cache['tags']))
-        self.comic_status.set_text('完结' if cache['finished'] else '未完结')
-        self.comic_likes.set_text(str(cache['totalLikes']))
-        self.comic_views.set_text(str(cache['totalViews']))
-        self.comic_comments.set_text(str(cache['commentsCount']))
-        self.detail_search.props.sensitive=True
-        self.detail_fav.props.sensitive=True
-        self.detail_heart.props.sensitive=True
-        self.detail_comment.props.sensitive=True
-        self.detail_heart.set_active(cache['isLiked'])
-        self.detail_fav.set_active(cache['isFavourite'])
-    def create_profile_window(self,button):
-        dialog=UserProfileWindow(self.user_profile)
-        dialog.run()
-        dialog.destroy()
+                self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('librebika/thumbnails/'+self.current_comic_id+'.'+resp['thumb']['path'].split('.')[-1]))
+            self.update_comic_profile_display(self.current_comic_id)
     def create_detail_search_window(self,button):
         dialog=CreateDetailSearchWindow(self.comic_translator.get_text()!='未知',self.comic_tags.get_text().split(','))
         ret=dialog.run()
@@ -589,16 +516,6 @@ class LibreBikaWindow(gtk.Window):
                 self.task_data_core.append([kw,mode,dialog.sort.props.active_id,[],resp['total'],0 if resp['total']==0 else resp['pages']])
                 self.task_data_entries.append({'1':resp['docs']} if len(resp['docs'])!=0 else {})
                 self.task_data.append([kw,mode_display[mode],dialog.sort.get_active_text(),''])
-        dialog.destroy()
-    def create_settings_window(self,button):
-        dialog=SettingsWindow(self)
-        ret=dialog.run()
-        if ret==0:
-            self.config_mapping_service['channel']=dialog.select_channel.props.active_id
-            self.config_mapping_service['quality']=dialog.select_quality.props.active_id
-            for i in range(len(config_search_entries)):
-                self.config_mapping_search[config_search_entries[i]]='yes' if dialog.toggle_buttons[i].props.active else 'no'
-            self.save_config()
         dialog.destroy()
     def create_search_window(self,button):
         dialog=CreateSearchWindow()
@@ -639,18 +556,6 @@ class LibreBikaWindow(gtk.Window):
                         self.task_data.append([kw,mode_display['k'],dialog.sort.get_active_text(),','.join(categories) if categories!=None else ''])
             dialog.destroy()
             break
-    def pre_logout(self,button):
-        notice=gtk.MessageDialog(transient_for=self,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.YES_NO,text='确认操作')
-        notice.format_secondary_text('是否注销?')
-        ret=notice.run()
-        notice.destroy()
-        if ret==gtk.ResponseType.YES:
-            self.logout()
-    def logout(self):
-        path='librebika/token'
-        if os.path.exists(path):
-            os.remove(path)
-        self.destroy()
     def task_list_change(self,tree,path,col):
         self.task_list_index=path.get_indices()[0]
         self.task_list_stat_all.set_text('总数：'+str(self.task_data_core[self.task_list_index][4]))
@@ -703,6 +608,8 @@ class LibreBikaWindow(gtk.Window):
             else:
                 if data[1]=='k':
                     resp=connections.sv_keyword(self.gen_context(),data[0],BK_SORT[data[2]],page+1,data[3])
+                elif data[1]=='f':
+                    resp=connections.sv_user_favorite(self.gen_context(),page+1,data[2]=='t')
                 else:
                     resp=connections.sv_relation(self.gen_context(),data[0],data[1],BK_SORT[data[2]],page+1)
                 if resp==None:
@@ -726,6 +633,146 @@ class LibreBikaWindow(gtk.Window):
             for i in range(len(tmp_cache)):
                 self.element_list_cache_list.append(str(tmp_cache[i]),str(tmp_cache[i]))
             self.element_list_cache_list.props.active_id=str(page+1)
+    def create_settings_window(self,button):
+        dialog=SettingsWindow(self)
+        ret=dialog.run()
+        if ret==0:
+            self.config_mapping_service['channel']=dialog.select_channel.props.active_id
+            self.config_mapping_service['quality']=dialog.select_quality.props.active_id
+            for i in range(len(config_search_entries)):
+                self.config_mapping_search[config_search_entries[i]]='yes' if dialog.toggle_buttons[i].props.active else 'no'
+            self.save_config()
+        dialog.destroy()
+    def chapter_load(self,button):
+        resepi=connections.sv_comic_episode(self.gen_context(),self.current_comic_id,self.comic_episodes_load_cache[self.current_comic_id]+1)
+        if resepi==None:
+            self.show_network_error()
+        elif type(resepi)==int:
+            self.show_auth_error()
+        else:
+            for i in resepi['docs']:
+                self.comic_episodes_cache[self.current_comic_id]['docs'].append(i)
+                self.chapter_data.append([i['title']])
+            self.comic_episodes_load_cache[self.current_comic_id]+=1
+        self.chapter_list_load.props.sensitive=self.comic_episodes_load_cache[self.current_comic_id]<self.comic_episodes_cache[self.current_comic_id]['pages']
+    def perform_stamp(self,button):
+        resp=connections.sv_stamp(self.gen_context())
+        if resp==None:
+            self.show_network_error()
+        elif type(resp)==int:
+            self.show_auth_error(resp)
+        else:
+            if resp:
+                if self.update_user_profile():
+                    self.stamp.set_label('签到不可用' if self.user_profile==None else ('已签到' if self.user_profile['isPunched'] else '签到'))
+                    if self.user_profile!=None and self.user_profile['isPunched']:
+                        self.stamp.props.sensitive=False
+            else:
+                notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.OK,text='签到错误')
+                notice.format_secondary_text('出现了未知的错误。')
+                notice.run()
+                notice.destroy()
+    def update_user_profile(self):
+        resp=connections.sv_user_profile(self.gen_context())
+        if resp==None:
+            self.show_network_error()
+        elif type(resp)==int:
+            self.show_auth_error(resp)
+        else:
+            self.user_profile=resp
+            return True
+        return False
+    def heart_change(self,button,state):
+        comic=self.comic_profiles_cache[self.current_comic_id]
+        value=comic['isLiked']
+        if state!=value:
+            resp=connections.sv_heart(self.gen_context(),self.current_comic_id)
+            if resp==None:
+                self.show_network_error()
+                button.set_active(value)
+                return True
+            elif type(resp)==int:
+                self.show_auth_error(resp)
+                button.set_active(value)
+                return True
+            else:
+                comic['isLiked']=not value
+    def fav_change(self,button,state):
+        comic=self.comic_profiles_cache[self.current_comic_id]
+        value=comic['isFavourite']
+        if state!=value:
+            resp=connections.sv_favorite(self.gen_context(),self.current_comic_id)
+            if resp==None:
+                self.show_network_error()
+                button.set_active(value)
+                return True
+            elif type(resp)==int:
+                self.show_auth_error(resp)
+                button.set_active(value)
+                return True
+            else:
+                comic['isFavourite']=not value
+    def quit(self,window):
+        self.downloader.should_die=True
+        gtk.main_quit()
+    def create_about_license_window(self,button):
+        dialog=AboutLicenseWindow()
+        dialog.run()
+        dialog.destroy()
+    def gen_context(self):
+        return [self.token,self.config_mapping_service['channel'],BK_QUALITIES[self.config_mapping_service['quality']]]
+    def show_auth_error(self,resp,transient_for=None):
+        if transient_for==None:
+            transient_for=self
+        notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.YES_NO,text='加载错误')
+        notice.format_secondary_text('服务器访问失败。代码：'+str(resp)+'\n'+('原因未知。' if resp!=1005 else '用户凭证过期或无效。')+'\n是否立刻注销以重启服务?')
+        ret=notice.run()
+        notice.destroy()
+        if ret==gtk.ResponseType.YES:
+            self.logout()
+    def show_network_error(self,transient_for=None):
+        if transient_for==None:
+            transient_for=self
+        notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.OK,text='加载错误')
+        notice.format_secondary_text('网络连接失败。')
+        notice.run()
+        notice.destroy()
+    def update_comic_profile_display(self,id):
+        cache=self.comic_profiles_cache[id]
+        self.comic_title.set_markup('<b>'+cache['title']+'</b>')
+        self.comic_author.set_text(cache['author'])
+        self.comic_translator.set_text(cache['chineseTeam'] if len(cache['chineseTeam'])>0 else '未知')
+        self.comic_description.set_text(cache['description'])
+        self.comic_creation.set_text(cache['created_at'].split('.')[0].replace('T',' '))
+        self.comic_update.set_text(cache['updated_at'].split('.')[0].replace('T',' '))
+        self.comic_categories.set_text(','.join(cache['categories']))
+        self.comic_tags.set_text(','.join(cache['tags']))
+        self.comic_status.set_text('完结' if cache['finished'] else '未完结')
+        self.comic_likes.set_text(str(cache['totalLikes']))
+        self.comic_views.set_text(str(cache['totalViews']))
+        self.comic_comments.set_text(str(cache['commentsCount']))
+        self.detail_search.props.sensitive=True
+        self.detail_fav.props.sensitive=True
+        self.detail_heart.props.sensitive=True
+        self.detail_comment.props.sensitive=True
+        self.detail_heart.set_active(cache['isLiked'])
+        self.detail_fav.set_active(cache['isFavourite'])
+    def create_profile_window(self,button):
+        dialog=UserProfileWindow(self.user_profile)
+        dialog.run()
+        dialog.destroy()
+    def pre_logout(self,button):
+        notice=gtk.MessageDialog(transient_for=self,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.YES_NO,text='确认操作')
+        notice.format_secondary_text('是否注销?')
+        ret=notice.run()
+        notice.destroy()
+        if ret==gtk.ResponseType.YES:
+            self.logout()
+    def logout(self):
+        path='librebika/token'
+        if os.path.exists(path):
+            os.remove(path)
+        self.destroy()
     def place_detail_image(self,pixbuf):
         pixbuf=pixbuf.scale_simple(200,275,GdkPixbuf.InterpType.BILINEAR)
         self.detail_image.set_from_pixbuf(pixbuf)
@@ -790,7 +837,6 @@ class UserProfileWindow(gtk.Dialog):
         gtk.Dialog.__init__(self,title='用户资料')
         self.get_action_area().set_halign(gtk.Align.CENTER)
         self.add_button('关闭',0)
-
         self.name_box=gtk.HBox()
         self.name_box.pack_start(g_label_bold('名字：'),False,False,0)
         self.name_box.pack_start(gtk.Label(profile['name']),False,False,0)
@@ -835,6 +881,10 @@ class UserProfileWindow(gtk.Dialog):
     def on_key_press(self,window,data):
         if data.keyval==gdk.KEY_Return:
             self.get_widget_for_response(0).clicked()
+
+class DownloadMonitorWindow(gtk.Dialog):
+    def __init__(self):
+        gtk.Dialog.__init__(self,title='下载管理器')
 
 class AboutLicenseWindow(gtk.Dialog):
     def __init__(self):
@@ -968,7 +1018,35 @@ class ElementPageControlWindow(gtk.Dialog):
         self.add_button('提交',0)
         self.add_button('取消',1)
         self.get_content_area().add(self.slider)
+        self.connect('key_press_event',self.on_key_press)
         self.show_all()
+    def on_key_press(self,window,data):
+        if data.keyval==gdk.KEY_Return:
+            self.get_widget_for_response(0).clicked()
+
+class ResetFavoriteWindow(gtk.Dialog):
+    def __init__(self):
+        gtk.Dialog.__init__(self,title='重载收藏夹')
+        self.get_action_area().set_halign(gtk.Align.CENTER)
+        self.add_button('提交',0)
+        self.add_button('取消',1)
+        content=self.get_content_area()
+        self.sort_box=gtk.HBox()
+        self.sort_box.pack_start(gtk.Label('排序'),False,False,10)
+        self.sort=g_combobox_with_entries({'d':'默认','t':'旧新'})
+        self.sort.set_size_request(150,-1)
+        self.sort.set_halign(gtk.Align.START)
+        g_set_margins(self.sort_box,bottom=10)
+        self.sort_box.add(self.sort)
+        self.sort.props.active_id='d'
+        content.add(self.sort_box)
+        g_set_margins(content,20,20,20,20)
+        g_set_margins(self.get_action_area(),20,20,0,20)
+        self.connect('key_press_event',self.on_key_press)
+        self.show_all()
+    def on_key_press(self,window,data):
+        if data.keyval==gdk.KEY_Return:
+            self.get_widget_for_response(0).clicked()
 
 class SettingsWindow(gtk.Dialog):
     def __init__(self,lb_window):
