@@ -37,7 +37,11 @@ import uuid
 import json
 import requests
 import shutil
+import urllib.parse
 from time import time_ns
+
+def bk_level_to_exp(level):
+    return 100*level*(level-1)
 
 def bk_encryption(string):
     instance=hmac.new(BK_SIGNATURE.encode('utf-8'),string.lower().encode('utf-8'),hashlib.sha256)
@@ -168,3 +172,31 @@ def sv_comic_resource_list(context,id,idx,page):
     if resp['code']!=200 and 'message' in resp:
         return int(resp['error'])
     return resp['data']['pages']
+
+def sv_relation(context,kw,mode,sort,page): #Android: no sorting
+    try:
+        proc_kw=urllib.parse.quote_plus(kw).replace('+','%20').replace('%28','(').replace('%29',')') #BEWARE THIS IS MAGIC
+        resp=json.loads(submit('comics?page='+str(page)+'&'+mode+'='+proc_kw,context[1],context[2],is_post=False,token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return resp['data']['comics']
+
+def sv_favorite(context,id):
+    try:
+        resp=json.loads(submit('comics/'+id+'/favourite',context[1],context[2],token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return True
+
+def sv_heart(context,id):
+    try:
+        resp=json.loads(submit('comics/'+id+'/like',context[1],context[2],token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return True

@@ -52,7 +52,7 @@ import uis
 GTK_VERSION=f'{gtk.MAJOR_VERSION}.{gtk.MINOR_VERSION}.{gtk.MICRO_VERSION}'
 LB_DIRECTORY='librebika/'
 LB_NAME = 'LibreBika'
-LB_VERSION='1.0'
+LB_VERSION='BETA'
 
 requires_login=True
 token=None
