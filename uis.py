@@ -41,10 +41,10 @@ BK_SORT={'d':'dd','t':'da','h':'ld','p':'vd'}
 BK_GENDERS={'m':'男','f':'女','bot':'机器'}
 
 username_regex=re.compile('[^\da-z\._]')
-config_service_entries=['quality','channel']
+config_service_entries=['quality','channel','resetDetailView']
 config_search_entries=['includeoriginaltext','includegay','includenonadult','includegore']
 config_search_indices={'includeoriginaltext':32,'includegay':12,'includenonadult':9,'includegore':35}
-mode_display={'k':'关键字','a':'作者','t':'标签','ct':'汉化组','f':'收藏'}
+mode_display={'k':'关键字','a':'作者','t':'标签','ct':'汉化组','f':'收藏','c':'分类'}
 sort_display={'d':'默认','t':'旧新','h':'爱心','p':'人数'}
 
 def g_set_margins(widget,top=0,right=0,bottom=0,left=0):
@@ -166,8 +166,8 @@ class LibreBikaWindow(gtk.Window):
         self.quick.set_valign(gtk.Align.START)
         self.task_box=gtk.Box()
         g_set_margins(self.task_box,left=20)
-        self.task_add=g_button_with_callback('+',self.create_search_window)
-        self.task_del=gtk.Button.new_with_label('-')
+        self.task_add=g_button_with_callback('+',self.create_search_pre_window)
+        self.task_del=g_button_with_callback('-',self.remove_task)
         self.task_reset_fav=g_button_with_callback('重载收藏夹',self.reset_favorite)
         g_set_margins(self.task_add,20,0,20,0)
         g_set_margins(self.task_del,20,0,20,20)
@@ -402,14 +402,14 @@ class LibreBikaWindow(gtk.Window):
                 if self.task_data_core[self.task_list_index][1]=='f':
                     self.element_data.clear()
                     self.chapter_data.clear()
+                    if self.config_mapping_service['resetDetailView']=='yes':
+                        self.reset_detail_view()
                     self.task_list_stat_all.set_text('总数：'+str(self.task_data_core[self.task_list_index][4]))
                     self.task_list_stat_pages.set_text('页面数：'+str(self.task_data_core[self.task_list_index][5]))
                     self.element_list_action_previous.props.sensitive=False
                     self.element_list_action_jump.props.sensitive=self.task_data_core[self.task_list_index][5]>1
                     self.element_list_action_next.props.sensitive=self.task_data_core[self.task_list_index][5]>1
                     self.element_list_index=0
-                    self.element_data.clear()
-                    self.chapter_data.clear()
                     self.chapter_list_load.props.sensitive=False
                     self.element_list_cache_list.remove_all()
                     if len(self.task_data_entries[self.task_list_index])!=0:
@@ -423,6 +423,18 @@ class LibreBikaWindow(gtk.Window):
                             self.element_list_cache_list.append(str(tmp_cache[i]),str(tmp_cache[i]))
                         self.element_list_cache_list.props.active_id='1'
         dialog.destroy()
+    def remove_task(self,button):
+        if self.task_data_core[self.task_list_index][1]!='f':
+            self.element_data.clear()
+            self.chapter_data.clear()
+            if self.config_mapping_service['resetDetailView']=='yes':
+                self.reset_detail_view()
+            self.task_data_entries.remove(self.task_data_entries[self.task_list_index])
+            self.task_data_core.remove(self.task_data_core[self.task_list_index])
+            self.task_data.remove(self.task_data[self.task_list_index].iter)
+            if len(self.task_data)==1:
+                self.task_list_index-=1
+            self.task_list.row_activated(gtk.TreePath.new_from_indices([self.task_list_index]),gtk.TreeViewColumn())
     def chapter_list_change(self,tree,path,col):
         page=1
         imgs=[]
@@ -517,7 +529,33 @@ class LibreBikaWindow(gtk.Window):
                 self.task_data_entries.append({'1':resp['docs']} if len(resp['docs'])!=0 else {})
                 self.task_data.append([kw,mode_display[mode],dialog.sort.get_active_text(),''])
         dialog.destroy()
-    def create_search_window(self,button):
+    def create_category_search_window(self):
+        dialog=CreateCategorySearchWindow()
+        ret=dialog.run()
+        if ret==0:
+            for i in range(36):
+                if dialog.categories_children[i].get_active():
+                    resp=connections.sv_category(self.gen_context(),1,BK_CATEGORIES_RAW[i],BK_SORT[dialog.sort.props.active_id])
+                    if resp==None:
+                        self.show_network_error(dialog)
+                    elif type(resp)==int:
+                        self.show_auth_error(resp,dialog)
+                    else:
+                        self.task_data_core.append([BK_CATEGORIES[i],'c',dialog.sort.props.active_id,[],resp['total'],0 if resp['total']==0 else resp['pages']])
+                        self.task_data_entries.append({'1':resp['docs']} if len(resp['docs'])!=0 else {})
+                        self.task_data.append([BK_CATEGORIES[i],mode_display['c'],dialog.sort.get_active_text(),''])
+                    break
+        dialog.destroy()
+    def create_search_pre_window(self,button):
+        dialog=CreateSearchPreWindow()
+        ret=dialog.run()
+        dialog.destroy()
+        if ret==0:
+            if dialog.keyword.get_active():
+                self.create_search_window()
+            else:
+                self.create_category_search_window()
+    def create_search_window(self):
         dialog=CreateSearchWindow()
         while True:
             ret=dialog.run()
@@ -538,12 +576,15 @@ class LibreBikaWindow(gtk.Window):
                                 categories.append(BK_CATEGORIES_RAW[i])
                         if len(categories)==0:
                             categories=None
+                    #Temporarily removing functionality for disabling certain categories TODO
+                    '''
                     for i in self.config_mapping_search:
                         if self.config_mapping_search[i]=='no':
                             if categories==None:
                                 categories=BK_CATEGORIES_RAW.copy()
                             if BK_CATEGORIES_RAW[config_search_indices[i]] in categories:
                                 categories.remove(BK_CATEGORIES_RAW[config_search_indices[i]])
+                    '''
                     resp=connections.sv_keyword(self.gen_context(),kw,BK_SORT[dialog.sort.props.active_id],1,categories)
                     if resp==None:
                         self.show_network_error(dialog)
@@ -566,6 +607,8 @@ class LibreBikaWindow(gtk.Window):
         self.element_list_index=0
         self.element_data.clear()
         self.chapter_data.clear()
+        if self.config_mapping_service['resetDetailView']=='yes':
+            self.reset_detail_view()
         self.chapter_list_load.props.sensitive=False
         self.element_list_cache_list.remove_all()
         if len(self.task_data_entries[self.task_list_index])!=0:
@@ -610,6 +653,11 @@ class LibreBikaWindow(gtk.Window):
                     resp=connections.sv_keyword(self.gen_context(),data[0],BK_SORT[data[2]],page+1,data[3])
                 elif data[1]=='f':
                     resp=connections.sv_user_favorite(self.gen_context(),page+1,data[2]=='t')
+                elif data[1]=='c':
+                    for i in range(len(BK_CATEGORIES)):
+                        if BK_CATEGORIES[i]==data[0]:
+                            resp=connections.sv_category(self.gen_context(),page+1,BK_CATEGORIES_RAW[i],BK_SORT[data[2]])
+                            break
                 else:
                     resp=connections.sv_relation(self.gen_context(),data[0],data[1],BK_SORT[data[2]],page+1)
                 if resp==None:
@@ -633,12 +681,36 @@ class LibreBikaWindow(gtk.Window):
             for i in range(len(tmp_cache)):
                 self.element_list_cache_list.append(str(tmp_cache[i]),str(tmp_cache[i]))
             self.element_list_cache_list.props.active_id=str(page+1)
+            if self.config_mapping_service['resetDetailView']=='yes':
+                self.reset_detail_view()
+    def reset_detail_view(self):
+        self.current_comic_id=None
+        self.place_detail_image(GdkPixbuf.Pixbuf.new_from_file('picaph.png'))
+        self.comic_title.set_markup('<b>未选择</b>')
+        self.comic_author.set_text('未知')
+        self.comic_translator.set_text('未知')
+        self.comic_description.set_text('')
+        self.comic_creation.set_text('')
+        self.comic_update.set_text('')
+        self.comic_categories.set_text('')
+        self.comic_tags.set_text('')
+        self.comic_status.set_text('')
+        self.comic_likes.set_text('')
+        self.comic_views.set_text('')
+        self.comic_comments.set_text('')
+        self.detail_search.props.sensitive=False
+        self.detail_fav.props.sensitive=False
+        self.detail_heart.props.sensitive=False
+        self.detail_comment.props.sensitive=False
+        self.detail_heart.set_active(False)
+        self.detail_fav.set_active(False)
     def create_settings_window(self,button):
         dialog=SettingsWindow(self)
         ret=dialog.run()
         if ret==0:
             self.config_mapping_service['channel']=dialog.select_channel.props.active_id
             self.config_mapping_service['quality']=dialog.select_quality.props.active_id
+            self.config_mapping_service['resetDetailView']='yes' if dialog.select_reset.get_active() else 'no'
             for i in range(len(config_search_entries)):
                 self.config_mapping_search[config_search_entries[i]]='yes' if dialog.toggle_buttons[i].props.active else 'no'
             self.save_config()
@@ -667,6 +739,9 @@ class LibreBikaWindow(gtk.Window):
                     self.stamp.set_label('签到不可用' if self.user_profile==None else ('已签到' if self.user_profile['isPunched'] else '签到'))
                     if self.user_profile!=None and self.user_profile['isPunched']:
                         self.stamp.props.sensitive=False
+                        dialog=StampSuccessWindow(self.user_profile)
+                        dialog.run()
+                        dialog.destroy()
             else:
                 notice=gtk.MessageDialog(transient_for=transient_for,message_type=gtk.MessageType.WARNING,buttons=gtk.ButtonsType.OK,text='签到错误')
                 notice.format_secondary_text('出现了未知的错误。')
@@ -683,35 +758,37 @@ class LibreBikaWindow(gtk.Window):
             return True
         return False
     def heart_change(self,button,state):
-        comic=self.comic_profiles_cache[self.current_comic_id]
-        value=comic['isLiked']
-        if state!=value:
-            resp=connections.sv_heart(self.gen_context(),self.current_comic_id)
-            if resp==None:
-                self.show_network_error()
-                button.set_active(value)
-                return True
-            elif type(resp)==int:
-                self.show_auth_error(resp)
-                button.set_active(value)
-                return True
-            else:
-                comic['isLiked']=not value
+        if self.current_comic_id!=None:
+            comic=self.comic_profiles_cache[self.current_comic_id]
+            value=comic['isLiked']
+            if state!=value:
+                resp=connections.sv_heart(self.gen_context(),self.current_comic_id)
+                if resp==None:
+                    self.show_network_error()
+                    button.set_active(value)
+                    return True
+                elif type(resp)==int:
+                    self.show_auth_error(resp)
+                    button.set_active(value)
+                    return True
+                else:
+                    comic['isLiked']=not value
     def fav_change(self,button,state):
-        comic=self.comic_profiles_cache[self.current_comic_id]
-        value=comic['isFavourite']
-        if state!=value:
-            resp=connections.sv_favorite(self.gen_context(),self.current_comic_id)
-            if resp==None:
-                self.show_network_error()
-                button.set_active(value)
-                return True
-            elif type(resp)==int:
-                self.show_auth_error(resp)
-                button.set_active(value)
-                return True
-            else:
-                comic['isFavourite']=not value
+        if self.current_comic_id!=None:
+            comic=self.comic_profiles_cache[self.current_comic_id]
+            value=comic['isFavourite']
+            if state!=value:
+                resp=connections.sv_favorite(self.gen_context(),self.current_comic_id)
+                if resp==None:
+                    self.show_network_error()
+                    button.set_active(value)
+                    return True
+                elif type(resp)==int:
+                    self.show_auth_error(resp)
+                    button.set_active(value)
+                    return True
+                else:
+                    comic['isFavourite']=not value
     def quit(self,window):
         self.downloader.should_die=True
         gtk.main_quit()
@@ -793,8 +870,11 @@ class LibreBikaWindow(gtk.Window):
                     raise Exception()
                 if config['service']['quality'] not in ['l','m','h','o']:
                     raise Exception()
+                if config['service']['resetDetailView'] not in ['yes','no']:
+                    raise Exception()
                 self.config_mapping_service['channel']=config['service']['channel']
                 self.config_mapping_service['quality']=config['service']['quality']
+                self.config_mapping_service['resetDetailView']=config['service']['resetDetailView']
                 for i in config_search_entries:
                     if config['search'][i] not in ['yes','no']:
                         raise Exception()
@@ -821,6 +901,7 @@ class LibreBikaWindow(gtk.Window):
         search={}
         service['channel']='1'
         service['quality']='o'
+        service['resetDetailView']='no'
         search['includeoriginaltext']='yes'
         search['includegay']='yes'
         search['includenonadult']='yes'
@@ -882,9 +963,40 @@ class UserProfileWindow(gtk.Dialog):
         if data.keyval==gdk.KEY_Return:
             self.get_widget_for_response(0).clicked()
 
-class DownloadMonitorWindow(gtk.Dialog):
-    def __init__(self):
-        gtk.Dialog.__init__(self,title='下载管理器')
+class StampSuccessWindow(gtk.Dialog):
+    def __init__(self,profile):
+        gtk.Dialog.__init__(self,title='签到成功')
+        self.get_action_area().set_halign(gtk.Align.CENTER)
+        self.add_button('关闭',0)
+        self.name_box=gtk.HBox()
+        self.name_box.pack_start(g_label_bold('名字：'),False,False,0)
+        self.name_box.pack_start(gtk.Label(profile['name']),False,False,0)
+        self.id_box=gtk.HBox()
+        self.id_box.pack_start(g_label_bold('ID：'),False,False,0)
+        self.id_box.pack_start(gtk.Label(profile['_id']),False,False,0)
+        self.email_box=gtk.HBox()
+        self.email_box.pack_start(g_label_bold('邮箱（用户名）：'),False,False,0)
+        self.email_box.pack_start(gtk.Label(profile['email']),False,False,0)
+        self.level_box=gtk.HBox()
+        self.level_box.pack_start(g_label_bold('等级：'),False,False,0)
+        self.level_box.pack_start(gtk.Label(str(profile['level'])),False,False,0)
+        self.level=gtk.ProgressBar()
+        self.level.set_fraction(profile['exp']/connections.bk_level_to_exp(profile['level']+1))
+        self.level.set_show_text(True)
+        self.level.set_text(str(profile['exp'])+'/'+str(connections.bk_level_to_exp(profile['level']+1)))
+        g_set_margins(self.level,top=20)
+        self.get_content_area().add(self.name_box)
+        self.get_content_area().add(self.id_box)
+        self.get_content_area().add(self.email_box)
+        self.get_content_area().add(self.level_box)
+        self.get_content_area().add(self.level)
+        g_set_margins(self.get_content_area(),20,20,20,20)
+        g_set_margins(self.get_action_area(),20,20,0,20)
+        self.connect('key_press_event',self.on_key_press)
+        self.show_all()
+    def on_key_press(self,window,data):
+        if data.keyval==gdk.KEY_Return:
+            self.get_widget_for_response(0).clicked()
 
 class AboutLicenseWindow(gtk.Dialog):
     def __init__(self):
@@ -920,7 +1032,7 @@ class CreateDetailSearchWindow(gtk.Dialog):
         g_set_margins(self.get_action_area(),20,20,0,20)
         self.sort_box=gtk.HBox()
         self.sort_box.pack_start(gtk.Label('排序'),False,False,10)
-        self.sort=g_combobox_with_entries({'d':'默认','t':'旧新','h':'爱心','p':'人数'})
+        self.sort=g_combobox_with_entries(sort_display)
         self.sort.set_size_request(150,-1)
         self.sort.set_halign(gtk.Align.START)
         g_set_margins(self.sort_box,bottom=20)
@@ -955,6 +1067,56 @@ class CreateDetailSearchWindow(gtk.Dialog):
         if len(self.d)>0:
             self.tags.props.sensitive=self.select_tag.get_active()
 
+class CreateCategorySearchWindow(gtk.Dialog):
+    def __init__(self):
+        gtk.Dialog.__init__(self,title='分类搜索')
+        self.get_action_area().set_halign(gtk.Align.CENTER)
+        self.add_button('提交',0)
+        self.add_button('取消',1)
+        content=self.get_content_area()
+        g_set_margins(content,20,20,20,20)
+        g_set_margins(self.get_action_area(),20,20,0,20)
+        self.sort_box=gtk.HBox()
+        self.sort_box.pack_start(gtk.Label('排序'),False,False,10)
+        self.sort=g_combobox_with_entries(sort_display)
+        self.sort.set_size_request(150,-1)
+        self.sort.set_halign(gtk.Align.START)
+        g_set_margins(self.sort_box,bottom=20)
+        self.sort_box.add(self.sort)
+        self.sort.props.active_id='d'
+        self.categories=gtk.Grid()
+        self.categories_children=[]
+        for i in range(6):
+            for j in range(6):
+                self.categories_children.append(gtk.RadioButton(BK_CATEGORIES[i*6+j],group=None if i==j==0 else self.categories_children[0]))
+                self.categories.attach(self.categories_children[i*6+j],j,i,1,1)
+        content.add(self.sort_box)
+        content.add(self.categories)
+        self.connect('key_press_event',self.on_key_press)
+        self.show_all()
+    def on_key_press(self,window,data):
+        if data.keyval==gdk.KEY_Return:
+            self.get_widget_for_response(0).clicked()
+
+class CreateSearchPreWindow(gtk.Dialog):
+    def __init__(self):
+        gtk.Dialog.__init__(self,title='选择搜索模式')
+        self.get_action_area().set_halign(gtk.Align.CENTER)
+        self.add_button('提交',0)
+        self.add_button('取消',1)
+        content=self.get_content_area()
+        g_set_margins(content,20,20,20,20)
+        g_set_margins(self.get_action_area(),20,20,0,20)
+        self.keyword=gtk.RadioButton('关键字',None)
+        self.category=gtk.RadioButton('分类',group=self.keyword)
+        content.add(self.keyword)
+        content.add(self.category)
+        self.connect('key_press_event',self.on_key_press)
+        self.show_all()
+    def on_key_press(self,window,data):
+        if data.keyval==gdk.KEY_Return:
+            self.get_widget_for_response(0).clicked()
+
 class CreateSearchWindow(gtk.Dialog):
     def __init__(self):
         gtk.Dialog.__init__(self,title='关键字搜索')
@@ -969,7 +1131,7 @@ class CreateSearchWindow(gtk.Dialog):
         g_set_margins(self.search,bottom=10)
         self.sort_box=gtk.HBox()
         self.sort_box.pack_start(gtk.Label('排序'),False,False,10)
-        self.sort=g_combobox_with_entries({'d':'默认','t':'旧新','h':'爱心','p':'人数'})
+        self.sort=g_combobox_with_entries(sort_display)
         self.sort.set_size_request(150,-1)
         self.sort.set_halign(gtk.Align.START)
         g_set_margins(self.sort_box,bottom=10)
@@ -1062,13 +1224,18 @@ class SettingsWindow(gtk.Dialog):
         self.select_channel_box=gtk.HBox()
         self.select_quality_box=gtk.HBox()
         self.select_channel=g_combobox_with_entries({'1':'1','2':'2','3':'3'})
-        self.select_channel_box.pack_start(gtk.Label('服务器'),False,False,20)
+        self.select_channel_box.pack_start(gtk.Label('服务器'),False,False,0)
         self.select_channel.props.active_id=lb_window.config_mapping_service['channel']
         self.select_channel_box.add(self.select_channel)
         self.select_quality=g_combobox_with_entries({'l':'低','m':'中','h':'高','o':'原版'})
-        self.select_quality_box.pack_start(gtk.Label('图片质量'),False,False,20)
+        self.select_quality_box.pack_start(gtk.Label('图片质量'),False,False,0)
         self.select_quality.props.active_id=lb_window.config_mapping_service['quality']
         self.select_quality_box.add(self.select_quality)
+        self.select_reset=gtk.CheckButton.new_with_label('自动清空漫画详情')
+        self.select_reset.set_active(lb_window.config_mapping_service['resetDetailView']=='yes')
+        g_set_margins(self.select_reset,bottom=30)
+        g_set_margins(self.select_channel,left=20)
+        g_set_margins(self.select_quality,left=20)
         g_set_margins(self.select_channel_box,bottom=10)
         g_set_margins(self.select_quality_box,bottom=10)
         self.select_lists.append(self.select_channel_box)
@@ -1081,11 +1248,15 @@ class SettingsWindow(gtk.Dialog):
             self.toggle_buttons[i].props.active=lb_window.config_mapping_search[config_search_entries[i]]=='yes'
         for i in self.select_lists:
             content.pack_start(i,False,False,0)
+        content.pack_start(self.select_reset,False,False,0)
         for i in self.toggle_buttons:
+            i.props.sensitive=False #TEMPORARY
             content.pack_start(i,False,False,0)
-        self.label=gtk.Label('影响仅限未来的关键字搜索')
+        '''
+        self.label=gtk.Label('目前无效果')
         g_set_margins(self.label,top=15)
         content.pack_end(self.label,False,False,0)
+        '''
         self.connect('key_press_event',self.on_key_press)
         self.show_all()
     def on_key_press(self,window,data):

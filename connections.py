@@ -80,7 +80,7 @@ def submit(path,channel,quality,is_post=True,params=None,payload={},token=None):
         else:
             return requests.post(BK_DOMAIN+path,headers=headers,params=params,json=payload).text
     else:
-        return requests.get(BK_DOMAIN+path,headers=headers,params=params).text
+        return requests.get(BK_DOMAIN+path,headers=headers,params=params).text #,proxies={'https':'https://127.0.0.1:8080'},verify=False
 
 def log_in(username,password):
     resp=json.loads(submit('auth/sign-in','1','l',payload={'email':username,'password':password}))
@@ -204,6 +204,16 @@ def sv_heart(context,id):
 def sv_user_favorite(context,page,sort_time):
     try:
         resp=json.loads(submit('users/favourite',context[1],context[2],is_post=False,params={'page':str(page),'s':'da' if sort_time else 'dd'},token=context[0]))
+    except:
+        return None
+    if resp['code']!=200 and 'message' in resp:
+        return int(resp['error'])
+    return resp['data']['comics']
+
+def sv_category(context,page,category,sort):
+    try:
+        proc_url='?page='+str(page)+'&c='+urllib.parse.quote_plus(category)+'&s='+sort #Insight (refer to sv_relation): URL encoding must be COMPLETED BEFORE hashing, or can result in invalid signature!
+        resp=json.loads(submit('comics'+proc_url,context[1],context[2],is_post=False,token=context[0]))
     except:
         return None
     if resp['code']!=200 and 'message' in resp:
